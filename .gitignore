@@ -3,7 +3,7 @@ __pycache__/
 .venv/
 .env
 .env.*
-!.env.example
+.env.example
 .DS_Store
 Thumbs.db
 evidence/local/
