@@ -1,0 +1,58 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-start-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare synthetic environment file
+        run: cp .env.example .env
+
+      - name: Compose / syntax check
+        run: docker compose config -q
+
+      - name: Build images
+        run: docker compose build
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Wait for readiness and validate
+        run: python3 validate.py --host 127.0.0.1 --port 8080 --timeout 90
+
+      - name: Show container status and logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  security-scan:
+    runs-on: ubuntu-latest
+    needs: build-start-validate
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build app image for scanning
+        run: docker build -t barq-app:ci .
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: barq-app:ci
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: '0'
+          ignore-unfixed: true
