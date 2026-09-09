@@ -116,10 +116,30 @@ docker compose down -v       # also remove the postgres-data / redis-data volume
 build, start, bounded wait for readiness, then `validate.py`. A separate job runs
 a Trivy image scan (report-only for now — see `security_review.md`).
 
+## Changes made live in the video demo
+
+Two changes were made on camera during the Part 5 video, after the steps above were
+already recorded working on the baseline setup:
+
+- **Public port moved from 8080 to 8090.** `docker-compose.yml`'s nginx service now
+  publishes `127.0.0.1:8090:80` instead of `8080`. Every `curl` command in this README
+  used `8080` for the pre-video baseline — use `8090` against the current `main` branch.
+- **A third backend, `app-03`, was added.** NGINX now load-balances across three
+  instances instead of two. No script changes were needed for this: `validate.py`
+  and `failure_test.py` discover running `app-*` containers via `docker ps` instead
+  of a hardcoded list, so they picked up `app-03` automatically once it was started
+  and reloaded into NGINX's upstream block.
+
+Both changes are covered live in the video, committed with `git diff` shown on
+screen, and indexed in `docs/EVIDENCE_INDEX.md` with their commit hashes and video
+timestamps. This section is a documentation-only follow-up commit made after the
+video to keep the README in sync with the final state.
+
 ## More detail
 
 - `troubleshooting.md` — investigation journal for the issues found in the starter environment.
 - `log_analysis.md` — access/error/application log analysis.
 - `decisions.md` / `security_review.md` — design decisions and risk review.
 - `AI_USAGE.md` — AI assistance disclosure.
-- `Architecture.png` — Show the arch of the project.
+- `Architecture_old.png` — Show the arch of the project before the video.
+- `Architecture_new.png` — Show the arch of the project after the video.
