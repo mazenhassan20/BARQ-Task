@@ -25,7 +25,7 @@ jobs:
         run: docker compose up -d
 
       - name: Wait for readiness and validate
-        run: python3 validate.py --host 127.0.0.1 --port 8080 --timeout 90
+        run: python3 validate.py --host 127.0.0.1 --port 8090 --timeout 90
 
       - name: Show container status and logs on failure
         if: failure()
