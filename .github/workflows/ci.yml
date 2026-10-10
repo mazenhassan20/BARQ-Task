@@ -57,8 +57,8 @@ jobs:
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
             | tar -xz kubeconform
           sudo mv kubeconform /usr/local/bin/
-      - name: Validate Kubernetes manifests
-        run: kubeconform -strict -summary -kubernetes-version 1.31.0 k8s/*.yaml
+      - name: Validate rendered Kubernetes manifests (kustomize build)
+        run: kubectl kustomize . | kubeconform -strict -summary -kubernetes-version 1.31.0 -
       - name: Syntax-check deploy script
         run: bash -n deploy.sh
       - name: Trivy secret scan (fails on findings)
@@ -105,6 +105,8 @@ jobs:
     if: needs.changes.outputs.image == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.meta.outputs.version }}
     permissions:
       contents: read
       packages: write
@@ -155,3 +157,27 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+
+  # GitOps hand-off: write the freshly pushed tag into kustomization.yaml.
+  # Argo CD sees the commit and rolls the Deployment. Runs only when `image` pushed.
+  deploy-tag:
+    needs: image
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Bump image tag in kustomization.yaml
+        env:
+          TAG: ${{ needs.image.outputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^sha-[0-9a-f]{7,}$ ]] || { echo "unexpected tag: $TAG"; exit 1; }
+          sed -i "s|^\(\s*newTag:\).*|\1 ${TAG}|" kustomization.yaml
+          git diff --quiet && { echo "tag already ${TAG}"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "ci: deploy ${TAG}"
+          git pull --rebase origin main
+          git push origin HEAD:main
