@@ -28,4 +28,4 @@ configMapGenerator:
 # CI bumps newTag after pushing a new image to GHCR. Argo CD then deploys it.
 images:
   - name: ghcr.io/mazenhassan20/barq-app
-    newTag: v1
+    newTag: sha-e4d21a0
