@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: barq
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mazenhassan20/BARQ-Task.git
+    targetRevision: main
+    path: .                      # root kustomization.yaml
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: barq
+  syncPolicy:
+    automated:
+      prune: false               # flip to true after the first clean sync
+      selfHeal: true             # revert manual drift in the cluster
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

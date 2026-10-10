@@ -1,0 +1,31 @@
+# Root kustomization: what Argo CD renders and what deploy.sh applies.
+# Lives at the repo root so the generators can read database/init.sql
+# (kustomize refuses files outside the directory that holds kustomization.yaml).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - k8s/00-namespace.yaml
+  - k8s/10-postgres.yaml
+  - k8s/20-redis.yaml
+  - k8s/30-app.yaml
+  - k8s/40-nginx.yaml
+  - k8s/50-networkpolicies.yaml
+
+# Replaces the two ConfigMaps deploy.sh used to create by hand.
+# Names get a content-hash suffix, and kustomize rewrites the references in
+# the StatefulSet/Deployment, so editing init.sql or nginx.k8s.conf rolls the pods.
+configMapGenerator:
+  - name: postgres-init
+    namespace: barq
+    files:
+      - 01-init.sql=database/init.sql
+  - name: nginx-conf
+    namespace: barq
+    files:
+      - nginx.conf=k8s/nginx.k8s.conf
+
+# CI bumps newTag after pushing a new image to GHCR. Argo CD then deploys it.
+images:
+  - name: ghcr.io/mazenhassan20/barq-app
+    newTag: v1
