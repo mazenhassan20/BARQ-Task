@@ -8,13 +8,13 @@ spec:
   source:
     repoURL: https://github.com/mazenhassan20/BARQ-Task.git
     targetRevision: main
-    path: .                      # root kustomization.yaml
+    path: .
   destination:
     server: https://kubernetes.default.svc
     namespace: barq
   syncPolicy:
     automated:
-      prune: false               # flip to true after the first clean sync
-      selfHeal: true             # revert manual drift in the cluster
+      prune: true
+      selfHeal: true
     syncOptions:
       - ApplyOutOfSyncOnly=true

@@ -1,4 +1,4 @@
-"""Small Flask/PostgreSQL/Redis service for the BARQ assessment."""
+"""Small Flask/PostgreSQL/Redis service for the BARQ assessment.."""
 import json
 import os
 import re
