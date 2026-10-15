@@ -1,0 +1,17 @@
+# Non-sensitive configuration only. Edit DB_HOST with the Terraform RDS endpoint
+# (hostname only, no :5432). DB_NAME must match the db_name used in Terraform.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: barq-config
+  namespace: barq-project
+  labels: { project: barq }
+data:
+  DB_HOST: "barq-postgres-lab.cjaqwcigslcf.eu-north-1.rds.amazonaws.com"
+  DB_PORT: "5432"
+  DB_NAME: "barqdb"
+  DB_SSLMODE: "require"
+  REDIS_URL: "redis://redis:6379/0"
+  APP_HOST: "0.0.0.0"
+  APP_PORT: "8080"
+  APP_MESSAGE: "Welcome to BARQ Systems - v1"

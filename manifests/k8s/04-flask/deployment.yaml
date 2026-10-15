@@ -1,0 +1,81 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata: { name: barq-app, namespace: barq-project }
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector: { matchLabels: { app: barq-app } }
+  template:
+    metadata: { labels: { app: barq-app } }
+    spec:
+      # Allow scheduling on the control-plane too, so pods can run on both nodes.
+      tolerations:
+        - {
+            key: node-role.kubernetes.io/control-plane,
+            operator: Exists,
+            effect: NoSchedule,
+          }
+      # Prefer spreading the 2 replicas across different nodes.
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                topologyKey: kubernetes.io/hostname
+                labelSelector: { matchLabels: { app: barq-app } }
+      containers:
+        - name: app
+          image: docker.io/zinabelamir/barq-app:v1 # use fixed tags (v1, v2), not :latest
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: barq-config }
+          env:
+            # Order matters: DATABASE_URL uses the $(VARS) defined above it.
+            - {
+                name: DB_HOST,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_HOST } },
+              }
+            - {
+                name: DB_PORT,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_PORT } },
+              }
+            - {
+                name: DB_NAME,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_NAME } },
+              }
+            - {
+                name: DB_SSLMODE,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_SSLMODE } },
+              }
+            - {
+                name: DB_USER,
+                valueFrom:
+                  { secretKeyRef: { name: barq-secret, key: DB_USER } },
+              }
+            - {
+                name: DB_PASSWORD,
+                valueFrom:
+                  { secretKeyRef: { name: barq-secret, key: DB_PASSWORD } },
+              }
+            - name: DATABASE_URL
+              value: "postgresql://$(DB_USER):$(DB_PASSWORD)@$(DB_HOST):$(DB_PORT)/$(DB_NAME)?sslmode=$(DB_SSLMODE)"
+            - name: INSTANCE_ID
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 500m, memory: 256Mi }

@@ -1,0 +1,53 @@
+apiVersion: batch/v1
+kind: Job
+metadata: { name: db-init, namespace: barq-project }
+spec:
+  backoffLimit: 4
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: psql
+          image: postgres:16-alpine
+          command: ["sh", "-c"]
+          args:
+            - psql "host=$DB_HOST port=$DB_PORT dbname=$DB_NAME user=$DB_USER sslmode=$DB_SSLMODE" -v ON_ERROR_STOP=1 -f /sql/01-init.sql
+          env:
+            - {
+                name: DB_HOST,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_HOST } },
+              }
+            - {
+                name: DB_PORT,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_PORT } },
+              }
+            - {
+                name: DB_NAME,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_NAME } },
+              }
+            - {
+                name: DB_SSLMODE,
+                valueFrom:
+                  { configMapKeyRef: { name: barq-config, key: DB_SSLMODE } },
+              }
+            - {
+                name: DB_USER,
+                valueFrom:
+                  { secretKeyRef: { name: barq-secret, key: DB_USER } },
+              }
+            - {
+                name: PGPASSWORD,
+                valueFrom:
+                  { secretKeyRef: { name: barq-secret, key: DB_PASSWORD } },
+              }
+          volumeMounts:
+            - { name: sql, mountPath: /sql }
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+      volumes:
+        - name: sql
+          configMap: { name: db-init-sql }

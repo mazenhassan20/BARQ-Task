@@ -1,0 +1,17 @@
+# Replaces the old postgres-init ConfigMap. Creates the table + seed rows on RDS.
+# Safe to re-run: CREATE IF NOT EXISTS, and seed rows are only inserted into an empty table.
+apiVersion: v1
+kind: ConfigMap
+metadata: { name: db-init-sql, namespace: barq-project }
+data:
+  01-init.sql: |
+    CREATE TABLE IF NOT EXISTS records (
+        id bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+        title varchar(200) NOT NULL CHECK (length(trim(title)) > 0)
+    );
+    INSERT INTO records (title)
+    SELECT t FROM (VALUES
+        ('Review service readiness'),
+        ('Document the operating procedure')
+    ) AS seed(t)
+    WHERE NOT EXISTS (SELECT 1 FROM records);

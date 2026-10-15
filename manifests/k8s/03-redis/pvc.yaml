@@ -1,0 +1,12 @@
+# Prereq: a StorageClass named "local-path" (Rancher local-path-provisioner) and the
+# worker node labelled:  kubectl label node <worker-name> redis-storage=true
+# local-path volumes live on ONE node's disk: they survive pod/Deployment recreation
+# but NOT loss/replacement of that worker node.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: redis-data, namespace: barq-project }
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: local-path
+  resources:
+    requests: { storage: 1Gi }
