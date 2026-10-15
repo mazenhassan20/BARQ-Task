@@ -13,7 +13,7 @@ data:
         upstream application_pool { server barq-app:8080 max_fails=3 fail_timeout=10s; }
         server {
             listen 80;
-            location = /health {
+            location = /nginx-health {
                 access_log off;
                 return 200 'ok';
             }

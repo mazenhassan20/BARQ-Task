@@ -24,9 +24,9 @@ spec:
                 subPath: nginx.conf,
               }
           readinessProbe:
-            { httpGet: { path: /health, port: 80 }, periodSeconds: 5 }
+            { httpGet: { path: /nginx-health, port: 80 }, periodSeconds: 5 }
           livenessProbe:
-            httpGet: { path: /health, port: 80 }
+            httpGet: { path: /nginx-health, port: 80 }
             initialDelaySeconds: 10
             periodSeconds: 10
           resources:
