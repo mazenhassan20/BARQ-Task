@@ -15,3 +15,10 @@ resources:
   - 05-nginx/configmap.yaml
   - 05-nginx/deployment.yaml
   - 05-nginx/service.yaml
+  - 06-networkpolicy.yaml
+
+
+
+images:
+  - name: docker.io/zinabelamir/barq-app
+    newTag: 6ca3443
