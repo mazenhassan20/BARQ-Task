@@ -1,0 +1,297 @@
+---
+
+- name: Wait for the EC2 nodes to accept SSH
+  hosts: all
+  gather_facts: false
+  tasks:
+    # Fresh instances need a short while after `terraform apply` before sshd answers.
+    - name: Wait until the node is reachable
+      ansible.builtin.wait_for_connection:
+        delay: 5
+        timeout: 300
+
+- name: Common setup (all nodes)
+  hosts: all
+  become: true
+  vars:
+    k8s_version: "1.31"
+  tasks:
+    - name: Set hostname to the inventory name
+      ansible.builtin.hostname:
+        name: "{{ inventory_hostname }}"
+
+    - name: Disable swap for the running system
+      ansible.builtin.command: swapoff -a
+      changed_when: true
+      when: ansible_swaptotal_mb | int > 0
+
+    - name: Remove swap entries from /etc/fstab
+      ansible.builtin.replace:
+        path: /etc/fstab
+        regexp: '^([^#].*\sswap\s.*)$'
+        replace: '# \1'
+
+    - name: Configure kernel modules to load at boot
+      ansible.builtin.copy:
+        dest: /etc/modules-load.d/k8s.conf
+        content: |
+          overlay
+          br_netfilter
+        mode: "0644"
+
+    - name: Load kernel modules now
+      community.general.modprobe:
+        name: "{{ item }}"
+        state: present
+      loop:
+        - overlay
+        - br_netfilter
+
+    - name: Apply sysctl settings for Kubernetes networking
+      ansible.posix.sysctl:
+        name: "{{ item.name }}"
+        value: "{{ item.value }}"
+        sysctl_file: /etc/sysctl.d/k8s.conf
+        sysctl_set: true
+        reload: true
+        state: present
+      loop:
+        - { name: net.bridge.bridge-nf-call-iptables, value: "1" }
+        - { name: net.bridge.bridge-nf-call-ip6tables, value: "1" }
+        - { name: net.ipv4.ip_forward, value: "1" }
+
+    - name: Install prerequisite packages and containerd
+      ansible.builtin.apt:
+        name:
+          - containerd
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gpg
+          - conntrack
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+        lock_timeout: 180
+
+    - name: Ensure /etc/containerd exists
+      ansible.builtin.file:
+        path: /etc/containerd
+        state: directory
+        mode: "0755"
+
+    - name: Check whether containerd already uses the systemd cgroup driver
+      ansible.builtin.command: grep -qs "SystemdCgroup = true" /etc/containerd/config.toml
+      register: cgroup_check
+      failed_when: false
+      changed_when: false
+
+    - name: Generate default containerd config
+      ansible.builtin.shell: containerd config default > /etc/containerd/config.toml
+      args:
+        executable: /bin/bash
+      changed_when: true
+      when: cgroup_check.rc != 0
+
+    - name: Enable SystemdCgroup in containerd config
+      ansible.builtin.replace:
+        path: /etc/containerd/config.toml
+        regexp: 'SystemdCgroup = false'
+        replace: 'SystemdCgroup = true'
+      notify: Restart containerd
+
+    - name: Enable and start containerd
+      ansible.builtin.systemd:
+        name: containerd
+        enabled: true
+        state: started
+
+    - name: Create apt keyrings directory
+      ansible.builtin.file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+
+    - name: Download and install the Kubernetes apt signing key
+      ansible.builtin.shell: >
+        set -o pipefail &&
+        curl -fsSL https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/Release.key
+        | gpg --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        executable: /bin/bash
+        creates: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+
+    - name: Add the Kubernetes apt repository
+      ansible.builtin.apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] https://pkgs.k8s.io/core:/stable:/v{{ k8s_version }}/deb/ /"
+        filename: kubernetes
+        state: present
+        update_cache: true
+
+    - name: Install kubelet, kubeadm and kubectl
+      ansible.builtin.apt:
+        name:
+          - kubelet
+          - kubeadm
+          - kubectl
+        state: present
+        lock_timeout: 180
+
+    - name: Hold Kubernetes packages at the installed version
+      ansible.builtin.dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubelet
+        - kubeadm
+        - kubectl
+
+    - name: Enable kubelet
+      ansible.builtin.systemd:
+        name: kubelet
+        enabled: true
+        state: started
+
+    - name: Apply pending containerd restart before continuing
+      ansible.builtin.meta: flush_handlers
+
+  handlers:
+    - name: Restart containerd
+      ansible.builtin.systemd:
+        name: containerd
+        state: restarted
+
+- name: Control plane setup
+  hosts: master
+  become: true
+  vars:
+    pod_cidr: "10.244.0.0/16"
+    calico_version: "v3.27.0"
+    kubeconfig: /etc/kubernetes/admin.conf
+  tasks:
+    - name: Initialize the cluster
+      ansible.builtin.command: >
+        kubeadm init
+        --apiserver-advertise-address={{ private_ip }}
+        --apiserver-cert-extra-sans={{ ansible_host }}
+        --pod-network-cidr={{ pod_cidr }}
+      args:
+        creates: /etc/kubernetes/admin.conf
+
+    - name: Create .kube directory for the login user
+      ansible.builtin.file:
+        path: "/home/{{ ansible_user }}/.kube"
+        state: directory
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0755"
+
+    - name: Copy admin.conf for the login user
+      ansible.builtin.copy:
+        src: /etc/kubernetes/admin.conf
+        dest: "/home/{{ ansible_user }}/.kube/config"
+        remote_src: true
+        owner: "{{ ansible_user }}"
+        group: "{{ ansible_user }}"
+        mode: "0600"
+
+    - name: Check whether Calico is already installed
+      ansible.builtin.command: kubectl get daemonset calico-node -n kube-system
+      environment:
+        KUBECONFIG: "{{ kubeconfig }}"
+      register: calico_check
+      failed_when: false
+      changed_when: false
+
+    - name: Install Calico (only when it is not installed yet)
+      when: calico_check.rc != 0
+      block:
+        - name: Download the Calico manifest
+          ansible.builtin.get_url:
+            url: "https://raw.githubusercontent.com/projectcalico/calico/{{ calico_version }}/manifests/calico.yaml"
+            dest: /tmp/calico.yaml
+            mode: "0644"
+            force: false
+
+        - name: Switch Calico backend to vxlan
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: 'calico_backend: "bird"'
+            replace: 'calico_backend: "vxlan"'
+
+        - name: Disable IP-in-IP on the default pool
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: '(- name: CALICO_IPV4POOL_IPIP\n\s+value: )"Always"'
+            replace: '\1"Never"'
+
+        - name: Enable VXLAN on the default pool
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: '(- name: CALICO_IPV4POOL_VXLAN\n\s+value: )"Never"'
+            replace: '\1"Always"'
+
+        - name: Remove BIRD health checks (BIRD is not used with vxlan)
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: '^[ ]*- -bird-(live|ready)\n'
+            replace: ''
+
+        - name: Uncomment CALICO_IPV4POOL_CIDR name
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: '^([ ]*)# - name: CALICO_IPV4POOL_CIDR$'
+            replace: '\1- name: CALICO_IPV4POOL_CIDR'
+
+        - name: Set CALICO_IPV4POOL_CIDR value to the pod CIDR
+          ansible.builtin.replace:
+            path: /tmp/calico.yaml
+            regexp: '^([ ]*)#[ ]+value: "192\.168\.0\.0/16"$'
+            replace: '\1  value: "{{ pod_cidr }}"'
+
+        - name: Apply Calico
+          ansible.builtin.command: kubectl apply -f /tmp/calico.yaml
+          environment:
+            KUBECONFIG: "{{ kubeconfig }}"
+          register: calico_apply
+          changed_when: "'created' in calico_apply.stdout or 'configured' in calico_apply.stdout"
+
+    - name: Generate the worker join command
+      ansible.builtin.command: kubeadm token create --print-join-command
+      register: join_cmd
+      changed_when: false
+
+    - name: Store the join command as a fact
+      ansible.builtin.set_fact:
+        join_command: "{{ join_cmd.stdout }}"
+
+- name: Worker setup
+  hosts: workers
+  become: true
+  tasks:
+    # `creates` skips the join when the node is already part of the cluster.
+    - name: Join the cluster
+      ansible.builtin.command: "{{ hostvars[groups['master'][0]].join_command }}"
+      args:
+        creates: /etc/kubernetes/kubelet.conf
+
+- name: Verify the cluster
+  hosts: master
+  become: true
+  tasks:
+    - name: Wait until all nodes are Ready
+      ansible.builtin.command: kubectl wait --for=condition=Ready nodes --all --timeout=300s
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      changed_when: false
+
+    - name: List nodes
+      ansible.builtin.command: kubectl get nodes -o wide
+      environment:
+        KUBECONFIG: /etc/kubernetes/admin.conf
+      register: nodes_out
+      changed_when: false
+
+    - name: Show nodes
+      ansible.builtin.debug:
+        var: nodes_out.stdout_lines
