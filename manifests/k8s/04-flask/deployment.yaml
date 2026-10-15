@@ -27,7 +27,7 @@ spec:
                 labelSelector: { matchLabels: { app: barq-app } }
       containers:
         - name: app
-          image: docker.io/zinabelamir/barq-app:v1 # use fixed tags (v1, v2), not :latest
+          image: docker.io/zinabelamir/barq-app:6ca3443 # use fixed tags (v1, v2), not :latest
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
           envFrom:
