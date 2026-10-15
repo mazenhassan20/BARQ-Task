@@ -11,3 +11,6 @@ evidence/local/
 backups/
 *.dump
 config/app.env
+Ansible/kubectl
+Ansible/kubectl.sha256
+Ansible/hosts.ini
