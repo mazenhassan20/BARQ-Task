@@ -131,11 +131,11 @@ resource "aws_security_group" "nodes" {
   }
 
   ingress {
-    description     = "Inter-node Kubernetes and CNI traffic between members of this security group"
-    from_port       = 0
-    to_port         = 0
-    protocol        = "-1"
-    self            = true
+    description = "Inter-node Kubernetes and CNI traffic between members of this security group"
+    from_port   = 0
+    to_port     = 0
+    protocol    = "-1"
+    self        = true
   }
 
   egress {
@@ -178,9 +178,9 @@ resource "aws_iam_role" "ec2_ssm" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Effect = "Allow"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
-      Action = "sts:AssumeRole"
+      Action    = "sts:AssumeRole"
     }]
   })
   tags = { Name = "${local.name_prefix}-ec2-ssm-role" }
