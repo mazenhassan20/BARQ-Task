@@ -1,29 +1,77 @@
 name: Docker Push
 
-# CI-only: build updated app image and push to Docker Hub.
-# Triggers ONLY on the aws-terraform-ansible branch (not main).
+# Build the app image and push it to Docker Hub.
+# Runs ONLY on the aws-terraform-ansible branch, and ONLY when something that ends up
+# inside the image changes (see the Dockerfile: app/, requirements.txt, the Dockerfile itself).
+# README, manifests, Terraform, Ansible, tests and docs never trigger it.
 on:
   push:
     branches: [aws-terraform-ansible]
     paths:
-      - app/**
-      - Dockerfile
-      - requirements.txt
-      - .github/workflows/docker-push.yml
+      - "app/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements.txt"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
+# Never cancel a push that is already running; queue the next one instead.
+concurrency:
+  group: docker-push-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  IMAGE: zinabelamir/barq-app
+
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+
   build-push:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
-    permissions:
-      contents: read
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Extract tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: type=sha,prefix=,format=short
+
+      # Build once locally and scan; a fixable CRITICAL stops the pipeline before anything is pushed.
+      - name: Build image (local, for scanning)
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          load: true
+          push: false
+          tags: barq-app:scan
+          cache-from: type=gha
+
+      - name: Trivy gate (fails on fixable CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: barq-app:scan
+          format: table
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
 
       - name: Log in to Docker Hub
         uses: docker/login-action@v3
@@ -31,26 +79,25 @@ jobs:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
-      - name: Extract tags
-        id: meta
-        uses: docker/metadata-action@v5
-        with:
-          images: zinabelamir/barq-app
-          tags: |
-            type=sha,prefix=sha-,format=short
-            type=raw,value=aws-terraform-ansible
-            type=raw,value=latest
-
       - name: Build and push
+        id: push
         uses: docker/build-push-action@v5
         with:
           context: .
           file: ./Dockerfile
           push: true
+          provenance: false
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      - name: Show pushed tags
-        run: echo "${{ steps.meta.outputs.tags }}"
+      - name: Summary
+        run: |
+          {
+            echo "### Pushed"
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo "digest: ${{ steps.push.outputs.digest }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
