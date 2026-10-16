@@ -1,0 +1,20 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: barq
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/mazenhassan20/BARQ-Task.git
+    targetRevision: aws-terraform-ansible
+    path: manifests/k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: barq-project
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - ApplyOutOfSyncOnly=true

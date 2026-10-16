@@ -42,6 +42,8 @@ jobs:
     needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    outputs:
+      tag: ${{ steps.meta.outputs.version }}
     steps:
       - uses: actions/checkout@v4
 
@@ -65,7 +67,7 @@ jobs:
           cache-from: type=gha
 
       - name: Trivy gate (fails on fixable CRITICAL)
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
           image-ref: barq-app:scan
           format: table
@@ -86,7 +88,7 @@ jobs:
           context: .
           file: ./Dockerfile
           push: true
-          provenance: false
+          provenance: false # keeps the registry free of untagged attestation entries
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
@@ -101,3 +103,34 @@ jobs:
             echo "digest: ${{ steps.push.outputs.digest }}"
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
+
+  # GitOps hand-off: write the freshly pushed tag into the kustomization.
+  # Argo CD watches this branch, sees the commit and rolls the Deployment.
+  # Runs only after the image was pushed. The commit touches manifests/ only, which does not
+  # trigger this workflow, and a push made with GITHUB_TOKEN does not trigger other workflows,
+  # so there is no loop.
+  deploy-tag:
+    needs: build-push
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.ref_name }}
+
+      - name: Bump image tag in kustomization.yaml
+        env:
+          TAG: ${{ needs.build-push.outputs.tag }}
+          BRANCH: ${{ github.ref_name }}
+        run: |
+          [[ "$TAG" =~ ^[0-9a-f]{7,}$ ]] || { echo "unexpected tag: $TAG"; exit 1; }
+          FILE=manifests/k8s/kustomization.yaml
+          sed -i "s|^\(\s*newTag:\).*|\1 ${TAG}|" "$FILE"
+          git diff --quiet && { echo "tag already ${TAG}"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "ci: deploy ${TAG}"
+          git pull --rebase origin "$BRANCH"
+          git push origin "HEAD:${BRANCH}"
