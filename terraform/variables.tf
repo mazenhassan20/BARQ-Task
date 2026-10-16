@@ -91,3 +91,9 @@ variable "db_allocated_storage_gb" {
   type        = number
   default     = 20
 }
+
+variable "app_allowed_cidrs" {
+  type        = list(string)
+  default     = ["0.0.0.0/0"]
+  description = "Who can reach the NGINX NodePort"
+}

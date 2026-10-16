@@ -1,5 +1,4 @@
-# Non-sensitive configuration only. Edit DB_HOST with the Terraform RDS endpoint
-# (hostname only, no :5432). DB_NAME must match the db_name used in Terraform.
+# Non-sensitive configuration only.
 apiVersion: v1
 kind: ConfigMap
 metadata:

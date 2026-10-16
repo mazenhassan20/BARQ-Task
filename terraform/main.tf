@@ -123,6 +123,14 @@ resource "aws_security_group" "nodes" {
   }
 
   ingress {
+    description = "BARQ NGINX NodePort"
+    from_port   = 30080
+    to_port     = 30080
+    protocol    = "tcp"
+    cidr_blocks = var.app_allowed_cidrs
+  }
+
+  ingress {
     description     = "Inter-node Kubernetes and CNI traffic between members of this security group"
     from_port       = 0
     to_port         = 0

@@ -27,13 +27,12 @@ spec:
                 labelSelector: { matchLabels: { app: barq-app } }
       containers:
         - name: app
-          image: docker.io/zinabelamir/barq-app:6ca3443 # use fixed tags (v1, v2), not :latest
+          image: docker.io/zinabelamir/barq-app:6ca3443
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
           envFrom:
             - configMapRef: { name: barq-config }
           env:
-            # Order matters: DATABASE_URL uses the $(VARS) defined above it.
             - {
                 name: DB_HOST,
                 valueFrom:
