@@ -10,6 +10,9 @@ spec:
   template:
     metadata: { labels: { app: barq-app } }
     spec:
+      # Pod-level hardening: use the container runtime's default seccomp filter.
+      securityContext:
+        seccompProfile: { type: RuntimeDefault }
       # Allow scheduling on the control-plane too, so pods can run on both nodes.
       tolerations:
         - {
@@ -30,6 +33,17 @@ spec:
           image: docker.io/zinabelamir/barq-app:6ca3443
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
+          # Container-level hardening: non-root, no privilege escalation,
+          # read-only root filesystem, all Linux capabilities dropped.
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          # The root filesystem is read-only, so give the app a writable /tmp.
+          volumeMounts:
+            - { name: tmp, mountPath: /tmp }
           envFrom:
             - configMapRef: { name: barq-config }
           env:
@@ -78,3 +92,5 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - { name: tmp, emptyDir: {} }
