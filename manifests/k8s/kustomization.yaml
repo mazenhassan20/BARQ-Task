@@ -21,4 +21,4 @@ resources:
 
 images:
   - name: docker.io/zinabelamir/barq-app
-    newTag: 6ca3443
+    newTag: 63a3f47
