@@ -1,0 +1,279 @@
+name: CI-CD
+
+on:
+  push:
+    branches: [aws-terraform-ansible]
+    paths:
+      # Application/image inputs
+      - "app/**"
+      - "database/**"
+      - "nginx/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements*.txt"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "validate.py"
+      - "tests/**"
+      # Kubernetes, Terraform, deployment scripts and workflow changes
+      - "manifests/**"
+      - "terraform/**"
+      - "deploy.sh"
+      - ".github/workflows/**"
+      # Do not trigger for documentation-only changes.
+      # (GitHub paths filters are inclusive here, so docs-only files are not listed.)
+  pull_request:
+    branches: [aws-terraform-ansible]
+    paths:
+      - "app/**"
+      - "database/**"
+      - "nginx/**"
+      - "Dockerfile"
+      - ".dockerignore"
+      - "requirements*.txt"
+      - "docker-compose.yml"
+      - ".env.example"
+      - "validate.py"
+      - "tests/**"
+      - "manifests/**"
+      - "terraform/**"
+      - "deploy.sh"
+      - ".github/workflows/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-cd-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  IMAGE: zinabelamir/barq-app
+
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      pull-requests: read
+    outputs:
+      image: ${{ steps.filter.outputs.image }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Detect changes that affect the application image
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v3
+        with:
+          filters: |
+            image:
+              - 'app/**'
+              - 'database/**'
+              - 'nginx/**'
+              - 'Dockerfile'
+              - '.dockerignore'
+              - 'requirements*.txt'
+              - 'docker-compose.yml'
+              - '.env.example'
+              - 'validate.py'
+
+      - name: Default image publishing to false for manual runs
+        if: github.event_name == 'workflow_dispatch'
+        run: echo "Manual runs perform validation only; they do not publish an image."
+
+  unit-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m unittest discover -s tests -v
+
+  build-start-validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Prepare synthetic environment file
+        run: cp .env.example .env
+
+      - name: Compose syntax check
+        run: docker compose config -q
+
+      - name: Build Compose services
+        run: docker compose build
+
+      - name: Start the stack
+        run: docker compose up -d
+
+      - name: Validate application endpoints
+        run: python3 validate.py --host 127.0.0.1 --port 8090 --timeout 90
+
+      - name: Show container status and logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --no-color --tail=200
+
+      - name: Tear down
+        if: always()
+        run: docker compose down -v
+
+  static-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz \
+            | tar -xz kubeconform
+          sudo mv kubeconform /usr/local/bin/
+
+      - name: Validate rendered Kubernetes manifests
+        run: kubectl kustomize manifests/k8s | kubeconform -strict -summary -kubernetes-version 1.31.0 -
+
+      - name: Syntax-check deployment script
+        run: bash -n manifests/deploy.sh
+
+      - name: Trivy secret scan (fails on findings)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: secret
+          exit-code: "1"
+
+      - name: Trivy config scan of Kubernetes manifests and Terraform (report only)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          scan-type: config
+          scan-ref: .
+          format: table
+          exit-code: "0"
+
+  terraform-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: terraform
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false -input=false
+      - run: terraform validate
+
+  image:
+    needs: [changes, unit-tests, build-start-validate, static-checks, terraform-checks]
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/aws-terraform-ansible' &&
+      needs.changes.outputs.image == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    outputs:
+      tag: ${{ steps.meta.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Generate immutable commit tag
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.IMAGE }}
+          tags: type=sha,prefix=,format=short
+
+      # Build the image once, load that exact image locally, scan it, then push the same tag.
+      - name: Build image for scanning
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          cache-from: type=gha
+
+      - name: Trivy image report (CRITICAL, HIGH)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          format: table
+          severity: CRITICAL,HIGH
+          exit-code: "0"
+          ignore-unfixed: true
+
+      - name: Trivy gate (fails on fixable CRITICAL)
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25
+        with:
+          image-ref: ${{ env.IMAGE }}:${{ steps.meta.outputs.version }}
+          format: table
+          severity: CRITICAL
+          exit-code: "1"
+          ignore-unfixed: true
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push the already-scanned image
+        run: docker push "${IMAGE}:${TAG}"
+        env:
+          TAG: ${{ steps.meta.outputs.version }}
+
+      - name: Publish summary
+        run: |
+          {
+            echo "### Published image"
+            echo '```'
+            echo "${IMAGE}:${TAG}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+        env:
+          TAG: ${{ steps.meta.outputs.version }}
+
+  deploy-tag:
+    needs: image
+    if: >-
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/aws-terraform-ansible' &&
+      needs.image.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: aws-terraform-ansible
+
+      - name: Update Kustomize image tag
+        env:
+          TAG: ${{ needs.image.outputs.tag }}
+        run: |
+          [[ "$TAG" =~ ^[0-9a-f]{7,}$ ]] || { echo "Unexpected image tag: $TAG"; exit 1; }
+          FILE=manifests/k8s/kustomization.yaml
+          sed -i "s|^\([[:space:]]*newTag:\).*|\1 ${TAG}|" "$FILE"
+          git diff --quiet && { echo "Image tag is already ${TAG}"; exit 0; }
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "$FILE"
+          git commit -m "ci: deploy ${TAG}"
+          git pull --rebase origin aws-terraform-ansible
+          git push origin HEAD:aws-terraform-ansible
