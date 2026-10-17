@@ -1,5 +1,3 @@
-# local-path volumes live on ONE node's disk: they survive pod/Deployment recreation
-# but NOT loss/replacement of that worker node.
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata: { name: redis-data, namespace: barq-project }
