@@ -198,7 +198,7 @@ resource "aws_iam_instance_profile" "ec2" {
 }
 
 resource "aws_instance" "control_plane" {
-  ami                         = data.aws_ami.ubuntu_2404.id
+  ami                         = "ami-09d835910a77f135c"
   instance_type               = var.control_plane_instance_type
   subnet_id                   = aws_subnet.public.id
   associate_public_ip_address = true
@@ -222,7 +222,7 @@ resource "aws_instance" "control_plane" {
 }
 
 resource "aws_instance" "worker" {
-  ami                         = data.aws_ami.ubuntu_2404.id
+  ami                         = "ami-09d835910a77f135c"
   instance_type               = var.worker_instance_type
   subnet_id                   = aws_subnet.public.id
   associate_public_ip_address = true
